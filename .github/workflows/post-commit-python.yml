@@ -1,0 +1,86 @@
+# #For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python
+
+# name: post-commit-python
+
+# on:
+#   workflow_call:
+#   workflow_dispatch:
+#   push:
+#     branches: [ "main" ]
+
+# jobs:
+#   build:
+#     runs-on: ubuntu-latest
+#     strategy:
+#       fail-fast: false
+#       matrix:
+#         python-version: ["3.11"]
+
+#     steps:
+#       - uses: actions/checkout@v3
+#       - uses: actions/setup-python@v5
+#         with:
+#           python-version: ${{ matrix.python-version }}
+#           cache: 'pip'
+#           cache-dependency-path: python_env/requirements-dev.txt
+#       - name: Install dependencies
+#         run: |
+#           python -m pip install --upgrade pip
+#           pip install -r python_env/requirements-dev.txt
+#           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+#       - uses: psf/black@23.10.1
+
+
+name: post-commit-python
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11"]
+
+    steps:
+      # --- Start timer ---
+      - name: Record CI start time
+        run: echo "CI_START_TIME=$(date +%s)" >> $GITHUB_ENV
+
+      - uses: actions/checkout@v3
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+          cache-dependency-path: python_env/requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r python_env/requirements-dev.txt
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - uses: psf/black@23.10.1
+
+      # --- Push metrics (ALWAYS runs) ---
+      - name: Push CI metrics to Pushgateway
+        if: always()
+        env:
+          PUSHGATEWAY_URL: ${{ secrets.PUSHGATEWAY_URL }}
+        run: |
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - CI_START_TIME))
+
+          echo "Pushing metrics to Pushgateway: $PUSHGATEWAY_URL"
+
+          cat <<EOF | curl --silent --show-error --fail --data-binary @- \
+          ${PUSHGATEWAY_URL}/metrics/job/github_ci/repo/${{ github.repository }}
+          ci_job_duration_seconds{workflow="${{ github.workflow }}",branch="${{ github.ref_name }}",status="${{ job.status }}"} $DURATION
+          ci_job_success{workflow="${{ github.workflow }}",branch="${{ github.ref_name }}"} $( [ "${{ job.status }}" = "success" ] && echo 1 || echo 0 )
+          EOF
